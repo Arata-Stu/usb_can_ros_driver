@@ -1,0 +1,9 @@
+<launch>
+  <node pkg="usb_can_ros_driver" exec="can_sender_node" name="can_sender_node" output="screen">
+    <remap from="can_rx" to="send/to_can"/>
+  </node>
+
+  <node pkg="usb_can_ros_driver" exec="can_receive_node" name="can_receive_node" output="screen">
+    <remap from="can_tx" to="receive/from_can"/>
+  </node>
+</launch>
