@@ -2,6 +2,8 @@
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <canlib.h>
+#include <deque> // 追加
+#include <mutex> // 追加
 #include "usb_can_ros_msg/msg/can_frame.hpp"
 
 using namespace std::chrono_literals;
@@ -10,12 +12,18 @@ class CanDriverNode : public rclcpp::Node {
 public:
     CanDriverNode()
     : Node("can_driver_node") {
+        this->declare_parameter("send_interval_ms", 10);
+        this->get_parameter("send_interval_ms", send_interval_ms_);
+
         subscription_ = this->create_subscription<usb_can_ros_msg::msg::CanFrame>(
-            "can_rx", 10,
+            "can_rx", 1,
             std::bind(&CanDriverNode::topic_callback, this, std::placeholders::_1)
         );
         setUpChannel(0, ch0_);
         setUpChannel(1, ch1_);
+
+        timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(send_interval_ms_), std::bind(&CanDriverNode::timer_callback, this));
     }
 
     ~CanDriverNode() {
@@ -49,20 +57,34 @@ private:
     }
 
     void topic_callback(const usb_can_ros_msg::msg::CanFrame::SharedPtr msg) {
-        // Convert the incoming message to a CAN frame
-        auto status = canWrite(ch1_, msg->id, msg->data.data(), msg->dlc, msg->flags);
-        if (status != canOK) {
-            char err_msg[64];
-            canGetErrorText(status, err_msg, sizeof(err_msg));
-            RCLCPP_ERROR(this->get_logger(), "Error sending frame: %s", err_msg);
-        } else {
-            // RCLCPP_INFO(this->get_logger(), "Frame sent: ID=%d", msg->id);
+        std::lock_guard<std::mutex> lock(mutex_);
+        message_queue_.push_back(*msg);
+    }
+
+    void timer_callback() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!message_queue_.empty()) {
+            auto msg = message_queue_.front();
+            message_queue_.pop_front();
+
+            auto status = canWrite(ch1_, msg.id, msg.data.data(), msg.dlc, msg.flags);
+            if (status != canOK) {
+                char err_msg[64];
+                canGetErrorText(status, err_msg, sizeof(err_msg));
+                RCLCPP_ERROR(this->get_logger(), "Error sending frame: %s", err_msg);
+                // 再試行のためにメッセージをキューの前に戻す
+                message_queue_.push_front(msg);
+            }
         }
     }
 
     rclcpp::Subscription<usb_can_ros_msg::msg::CanFrame>::SharedPtr subscription_;
+    rclcpp::TimerBase::SharedPtr timer_;
     CanHandle ch0_;
     CanHandle ch1_;
+    int send_interval_ms_;
+    std::deque<usb_can_ros_msg::msg::CanFrame> message_queue_; // 追加
+    std::mutex mutex_; // 追加
 };
 
 int main(int argc, char *argv[]) {

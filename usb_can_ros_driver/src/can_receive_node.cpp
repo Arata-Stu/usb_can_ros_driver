@@ -10,6 +10,9 @@ class CanReceiverNode : public rclcpp::Node {
 public:
     CanReceiverNode()
     : Node("can_receiver_node") {
+        this->declare_parameter("receive_interval_ms", 100);
+        this->get_parameter("receive_interval_ms", receive_interval_ms_);
+
         publisher_ = this->create_publisher<usb_can_ros_msg::msg::CanFrame>("can_tx", 10);
         setUpChannel(0, ch0_);
         receive_thread_ = std::thread(&CanReceiverNode::receiveLoop, this);
@@ -56,11 +59,11 @@ private:
             unsigned int flags;
             unsigned long timestamp;
 
-            canStatus status = canReadWait(ch0_, &id, data, &dlc, &flags, &timestamp, 1000);
+            canStatus status = canReadWait(ch0_, &id, data, &dlc, &flags, &timestamp, receive_interval_ms_);
             if (status == canOK) {
                 auto message = usb_can_ros_msg::msg::CanFrame();
                 message.id = id;
-                std::copy(std::begin(data), std::end(data), message.data.begin());
+                std::copy(std::begin(data), std::begin(data) + dlc, message.data.begin());
                 message.dlc = dlc;
                 message.flags = flags;
                 publisher_->publish(message);
@@ -77,6 +80,7 @@ private:
     CanHandle ch0_;
     std::thread receive_thread_;
     std::atomic<bool> running_{true};
+    int receive_interval_ms_;
 };
 
 int main(int argc, char *argv[]) {
